@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import axios from "axios"
 import { toast } from "sonner"
@@ -34,7 +34,7 @@ interface Project {
   repos: Repo[]
 }
 
-export default function Home() {
+function HomeContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [activeSection, setActiveSection] = useState<NavSection>("projects")
@@ -97,15 +97,23 @@ export default function Home() {
     }
     
     const newUrl = `?${params.toString()}`
-    const currentUrl = window.location.search
     
-    // Only update if URL actually changed
-    if (newUrl !== currentUrl) {
+    // Only update if URL actually changed (check client-side only)
+    if (typeof window !== "undefined") {
+      const currentUrl = window.location.search
+      if (newUrl !== currentUrl) {
+        router.replace(newUrl, { scroll: false })
+      }
+    } else {
       router.replace(newUrl, { scroll: false })
     }
   }, [activeSection, selectedProjectId, router])
 
   const loadProjects = () => {
+    if (typeof window === "undefined") {
+      setLoading(false)
+      return
+    }
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
       if (stored) {
@@ -121,6 +129,7 @@ export default function Home() {
   }
 
   const saveProjects = (projectsToSave: Project[]) => {
+    if (typeof window === "undefined") return
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(projectsToSave))
     } catch (error) {
@@ -568,5 +577,17 @@ export default function Home() {
         )}
       </main>
     </div>
+  )
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   )
 }
