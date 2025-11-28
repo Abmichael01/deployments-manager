@@ -17,9 +17,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Plus, GitBranch, Rocket, ChevronDown, ChevronUp, FileText, ArrowDown } from "lucide-react"
+import { Loader2, Plus, GitBranch, Rocket, ChevronDown, ChevronUp, FileText, ArrowDown, AlertCircle, X } from "lucide-react"
 
-type NavSection = "projects" | "logs"
+type NavSection = "projects" | "logs" | "errors"
 
 interface Repo {
   name: string
@@ -49,6 +49,8 @@ function HomeContent() {
   const [logs, setLogs] = useState<string[]>([])
   const [loadingLogs, setLoadingLogs] = useState(false)
   const logsContainerRef = useRef<HTMLDivElement>(null)
+  const [errors, setErrors] = useState<Array<{ id: string; timestamp: Date; message: string; details?: string }>>([])
+  const isUpdatingUrlRef = useRef(false)
 
   const STORAGE_KEY = "deployments-manager-projects"
 
@@ -68,15 +70,20 @@ function HomeContent() {
     }
   }, [])
 
-  // Sync with URL params when URL changes
+  // Sync with URL params when URL changes (only on mount and when URL actually changes)
   const sectionParam = searchParams.get("section")
   const projectParam = searchParams.get("project")
   
   useEffect(() => {
+    if (isUpdatingUrlRef.current) {
+      isUpdatingUrlRef.current = false
+      return
+    }
+    
     const section = sectionParam as NavSection | null
     const projectId = projectParam || ""
     
-    if (section && (section === "logs" || section === "projects") && section !== activeSection) {
+    if (section && (section === "logs" || section === "projects" || section === "errors") && section !== activeSection) {
       setActiveSection(section)
     }
     if (projectId && section === "logs" && projectId !== selectedProjectId) {
@@ -84,10 +91,13 @@ function HomeContent() {
     } else if (section === "projects" && selectedProjectId) {
       setSelectedProjectId("")
     }
-  }, [sectionParam, projectParam, activeSection, selectedProjectId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionParam, projectParam])
 
-  // Update URL when section or project changes
+  // Update URL when section or project changes (debounced to prevent loops)
   useEffect(() => {
+    if (typeof window === "undefined") return
+    
     const params = new URLSearchParams()
     params.set("section", activeSection)
     
@@ -97,17 +107,33 @@ function HomeContent() {
     }
     
     const newUrl = `?${params.toString()}`
+    const currentUrl = window.location.search
     
-    // Only update if URL actually changed (check client-side only)
-    if (typeof window !== "undefined") {
-      const currentUrl = window.location.search
-      if (newUrl !== currentUrl) {
-        router.replace(newUrl, { scroll: false })
-      }
-    } else {
+    // Only update if URL actually changed
+    if (newUrl !== currentUrl) {
+      isUpdatingUrlRef.current = true
       router.replace(newUrl, { scroll: false })
     }
   }, [activeSection, selectedProjectId, router])
+  
+  // Error handler
+  const addError = (message: string, details?: string) => {
+    const error = {
+      id: Date.now().toString(),
+      timestamp: new Date(),
+      message,
+      details,
+    }
+    setErrors((prev) => [error, ...prev].slice(0, 100)) // Keep last 100 errors
+  }
+  
+  const clearErrors = () => {
+    setErrors([])
+  }
+  
+  const removeError = (id: string) => {
+    setErrors((prev) => prev.filter((e) => e.id !== id))
+  }
 
   const loadProjects = () => {
     if (typeof window === "undefined") {
@@ -120,9 +146,11 @@ function HomeContent() {
         const parsedProjects = JSON.parse(stored)
         setProjects(parsedProjects)
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error loading projects:", error)
+      const errorMsg = error?.message || "Failed to load projects"
       toast.error("Failed to load projects")
+      addError("Failed to load projects", errorMsg)
     } finally {
       setLoading(false)
     }
@@ -132,9 +160,11 @@ function HomeContent() {
     if (typeof window === "undefined") return
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(projectsToSave))
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving projects:", error)
+      const errorMsg = error?.message || "Failed to save projects"
       toast.error("Failed to save projects")
+      addError("Failed to save projects", errorMsg)
       throw error
     }
   }
@@ -176,10 +206,13 @@ function HomeContent() {
         toast.success(`Fetched ${response.data.availableRepos.length} repos`)
       } else {
         toast.error("Failed to fetch repos")
+        addError("Failed to fetch repos", "Invalid response from server")
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching repos:", error)
+      const errorMsg = error.response?.data?.message || error.message || "Failed to fetch repos"
       toast.error("Failed to fetch repos. Check the base URL and try again.")
+      addError("Failed to fetch repos", errorMsg)
     } finally {
       setLoadingRepos(null)
     }
@@ -200,9 +233,11 @@ function HomeContent() {
           description: response.data.message || "Deploy hook is running",
         })
       } else {
+        const errorMsg = response.data.message || "Unknown error occurred"
         toast.error("Deployment failed", {
-          description: response.data.message || "Unknown error occurred",
+          description: errorMsg,
         })
+        addError("Deployment failed", errorMsg)
       }
     } catch (error: any) {
       console.error("Error deploying:", error)
@@ -210,6 +245,7 @@ function HomeContent() {
       toast.error("Deployment failed", {
         description: errorMessage,
       })
+      addError("Deployment failed", errorMessage)
     } finally {
       setDeployingRepo(null)
     }
@@ -257,8 +293,10 @@ function HomeContent() {
       }
     } catch (error: any) {
       console.error("Error fetching logs:", error)
-      setLogs([`Error fetching logs: ${error.response?.data?.message || error.message || "Unknown error"}`])
+      const errorMsg = error.response?.data?.message || error.message || "Unknown error"
+      setLogs([`Error fetching logs: ${errorMsg}`])
       toast.error("Failed to fetch logs")
+      addError("Failed to fetch logs", errorMsg)
     } finally {
       setLoadingLogs(false)
     }
@@ -389,6 +427,74 @@ function HomeContent() {
                         No logs available. Select a project to view logs.
                       </div>
                     )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeSection === "errors" && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Errors</CardTitle>
+                    <CardDescription>
+                      View all application errors
+                    </CardDescription>
+                  </div>
+                  {errors.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={clearErrors}
+                    >
+                      Clear All
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {errors.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No errors recorded</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {errors.map((error) => (
+                      <div
+                        key={error.id}
+                        className="p-4 rounded-lg border bg-card space-y-2"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <AlertCircle className="h-4 w-4 text-destructive" />
+                              <span className="font-medium text-sm">{error.message}</span>
+                            </div>
+                            {error.details && (
+                              <p className="text-xs text-muted-foreground ml-6 font-mono">
+                                {error.details}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground ml-6 mt-1">
+                              {error.timestamp.toLocaleString()}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => removeError(error.id)}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </CardContent>

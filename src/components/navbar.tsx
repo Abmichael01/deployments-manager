@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
 
-type NavSection = "projects" | "logs"
+type NavSection = "projects" | "logs" | "errors"
 
 interface NavbarProps {
   activeSection: NavSection
@@ -35,6 +35,16 @@ export function Navbar({ activeSection, onSectionChange }: NavbarProps) {
             )}
           >
             Deploy Logs
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => onSectionChange("errors")}
+            className={cn(
+              "h-full rounded-none transition-colors px-10",
+              activeSection === "errors" && "border-b border-white"
+            )}
+          >
+            Errors
           </Button>
         </div>
         <ThemeToggle />
