@@ -52,8 +52,6 @@ function HomeContent() {
   const [errors, setErrors] = useState<Array<{ id: string; timestamp: Date; message: string; details?: string }>>([])
   const isUpdatingUrlRef = useRef(false)
 
-  const STORAGE_KEY = "deployments-manager-projects"
-
   // Load projects on mount
   useEffect(() => {
     loadProjects()
@@ -135,20 +133,13 @@ function HomeContent() {
     setErrors((prev) => prev.filter((e) => e.id !== id))
   }
 
-  const loadProjects = () => {
-    if (typeof window === "undefined") {
-      setLoading(false)
-      return
-    }
+  const loadProjects = async () => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        const parsedProjects = JSON.parse(stored)
-        setProjects(parsedProjects)
-      }
+      const response = await axios.get("/api/projects")
+      setProjects(response.data || [])
     } catch (error: any) {
       console.error("Error loading projects:", error)
-      const errorMsg = error?.message || "Failed to load projects"
+      const errorMsg = error?.response?.data?.error || error?.message || "Failed to load projects"
       toast.error("Failed to load projects")
       addError("Failed to load projects", errorMsg)
     } finally {
@@ -156,20 +147,19 @@ function HomeContent() {
     }
   }
 
-  const saveProjects = (projectsToSave: Project[]) => {
-    if (typeof window === "undefined") return
+  const saveProjects = async (projectsToSave: Project[]) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(projectsToSave))
+      await axios.post("/api/projects", projectsToSave)
     } catch (error: any) {
       console.error("Error saving projects:", error)
-      const errorMsg = error?.message || "Failed to save projects"
+      const errorMsg = error?.response?.data?.error || error?.message || "Failed to save projects"
       toast.error("Failed to save projects")
       addError("Failed to save projects", errorMsg)
       throw error
     }
   }
 
-  const handleAddProject = (e: React.FormEvent) => {
+  const handleAddProject = async (e: React.FormEvent) => {
     e.preventDefault()
     if (newProjectName.trim() && newProjectUrl.trim()) {
       const newProject: Project = {
@@ -182,7 +172,7 @@ function HomeContent() {
       setProjects(updatedProjects)
       setNewProjectName("")
       setNewProjectUrl("")
-      saveProjects(updatedProjects)
+      await saveProjects(updatedProjects)
       toast.success("Project added successfully")
     }
   }
@@ -202,7 +192,7 @@ function HomeContent() {
             : p
         )
         setProjects(updatedProjects)
-        saveProjects(updatedProjects)
+        await saveProjects(updatedProjects)
         toast.success(`Fetched ${response.data.availableRepos.length} repos`)
       } else {
         toast.error("Failed to fetch repos")
