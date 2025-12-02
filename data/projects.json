@@ -3,6 +3,45 @@
     "id": "1764633548825",
     "name": "Tajma",
     "baseUrl": "https://tajma.net/",
-    "repos": []
+    "repos": [
+      {
+        "name": "tajma",
+        "path": "/var/www/Tajma",
+        "branch": "main"
+      },
+      {
+        "name": "nigercanton",
+        "path": "/var/www/NigerCanton",
+        "branch": "master"
+      }
+    ]
+  },
+  {
+    "id": "1764634158829",
+    "name": "Sharptoolz",
+    "baseUrl": "https://sharptoolz.com/",
+    "repos": [
+      {
+        "name": "backend",
+        "path": "/var/www/backend",
+        "branch": "main"
+      },
+      {
+        "name": "sharptoolz",
+        "path": "/var/www/sharptoolz",
+        "branch": "main"
+      },
+      {
+        "name": "shippingTracker",
+        "path": "/var/www/shippingTracker",
+        "branch": "main"
+      },
+      {
+        "name": "flightTracker",
+        "path": "/var/www/flightTracker",
+        "branch": "main"
+      }
+    ],
+    "logUrls": []
   }
 ]

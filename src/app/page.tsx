@@ -5,34 +5,22 @@ import { useSearchParams, useRouter } from "next/navigation"
 import axios from "axios"
 import { toast } from "sonner"
 import { Navbar } from "@/components/navbar"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Loader2, Plus, GitBranch, Rocket, ChevronDown, ChevronUp, FileText, ArrowDown, AlertCircle, X } from "lucide-react"
-
-type NavSection = "projects" | "logs" | "errors"
-
-interface Repo {
-  name: string
-  path: string
-  branch: string
-}
-
-interface Project {
-  id: string
-  name: string
-  baseUrl: string
-  repos: Repo[]
-}
+import { ProjectsSection } from "@/components/projects-section"
+import { LogsSection } from "@/components/logs-section"
+import { ErrorsSection } from "@/components/errors-section"
+import { PM2ServiceDetails as PM2ServiceDetailsComponent } from "@/components/pm2-service-details"
+import { PM2LogsViewer } from "@/components/pm2-logs-viewer"
+import { PM2RealtimeLogs } from "@/components/pm2-realtime-logs"
+import { Loader2 } from "lucide-react"
+import type {
+  NavSection,
+  Project,
+  Repo,
+  ErrorLog,
+  LogUrl,
+  PM2Service,
+  PM2ServiceDetails,
+} from "@/types"
 
 function HomeContent() {
   const searchParams = useSearchParams()
@@ -46,9 +34,24 @@ function HomeContent() {
   const [loading, setLoading] = useState(true)
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [selectedProjectId, setSelectedProjectId] = useState<string>("")
+  const [selectedProjectInProjects, setSelectedProjectInProjects] = useState<string>("")
+  const [selectedLogUrlId, setSelectedLogUrlId] = useState<string>("")
   const [logs, setLogs] = useState<string[]>([])
   const [loadingLogs, setLoadingLogs] = useState(false)
-  const logsContainerRef = useRef<HTMLDivElement>(null)
+  const [newLogUrlName, setNewLogUrlName] = useState<string>("")
+  const [newLogUrl, setNewLogUrl] = useState<string>("")
+  const [pm2Services, setPm2Services] = useState<PM2Service[]>([])
+  const [loadingPM2, setLoadingPM2] = useState(false)
+  const [pm2ActionLoading, setPm2ActionLoading] = useState<string | null>(null)
+  const [pm2ServiceDetails, setPm2ServiceDetails] = useState<PM2ServiceDetails | null>(null)
+  const [loadingPM2Details, setLoadingPM2Details] = useState(false)
+  const [pm2ServiceDetailsOpen, setPm2ServiceDetailsOpen] = useState(false)
+  const [pm2ServiceLogs, setPm2ServiceLogs] = useState<string[]>([])
+  const [loadingPM2Logs, setLoadingPM2Logs] = useState(false)
+  const [pm2ServiceLogsOpen, setPm2ServiceLogsOpen] = useState(false)
+  const [selectedPM2ServiceForLogs, setSelectedPM2ServiceForLogs] = useState<string>("")
+  const [pm2RealtimeLogsOpen, setPm2RealtimeLogsOpen] = useState(false)
+  const [selectedPM2ServiceForStreaming, setSelectedPM2ServiceForStreaming] = useState<string>("")
   const [errors, setErrors] = useState<Array<{ id: string; timestamp: Date; message: string; details?: string }>>([])
   const isUpdatingUrlRef = useRef(false)
 
@@ -167,13 +170,18 @@ function HomeContent() {
         name: newProjectName.trim(),
         baseUrl: newProjectUrl.trim(),
         repos: [],
+        logUrls: [],
       }
       const updatedProjects = [...projects, newProject]
       setProjects(updatedProjects)
       setNewProjectName("")
       setNewProjectUrl("")
-      await saveProjects(updatedProjects)
-      toast.success("Project added successfully")
+      try {
+        await saveProjects(updatedProjects)
+        toast.success("Project added successfully")
+      } catch (error) {
+        // Error already handled in saveProjects
+      }
     }
   }
 
@@ -183,7 +191,7 @@ function HomeContent() {
       const baseUrl = project.baseUrl.endsWith("/") 
         ? project.baseUrl.slice(0, -1) 
         : project.baseUrl
-      const response = await axios.get(`${baseUrl}/deploy`)
+      const response = await axios.get(`${baseUrl}/deploy-hook`)
       
       if (response.data.status === "success" && response.data.availableRepos) {
         const updatedProjects = projects.map((p) =>
@@ -216,7 +224,7 @@ function HomeContent() {
         ? project.baseUrl.slice(0, -1) 
         : project.baseUrl
       
-      const response = await axios.post(`${baseUrl}/deploy?repo=${repo.name}`)
+      const response = await axios.post(`${baseUrl}/deploy-hook?repo=${repo.name}`)
       
       if (response.data.status === "success") {
         toast.success(`Deployment triggered for ${repo.name}`, {
@@ -258,20 +266,45 @@ function HomeContent() {
 
   const handleProjectSelect = (projectId: string) => {
     setSelectedProjectId(projectId)
-    fetchLogs(projectId)
+    const project = projects.find((p) => p.id === projectId)
+    if (project) {
+      // Set default to deploy logs if no log URLs exist, or first log URL
+      if (!project.logUrls || project.logUrls.length === 0) {
+        setSelectedLogUrlId("default")
+      } else {
+        setSelectedLogUrlId(project.logUrls[0].id)
+      }
+    }
   }
 
-  const fetchLogs = async (projectId: string) => {
+  const handleLogUrlSelect = (logUrlId: string) => {
+    setSelectedLogUrlId(logUrlId)
+  }
+
+  const fetchLogs = async (projectId: string, logUrlId?: string) => {
     const project = projects.find((p) => p.id === projectId)
     if (!project) return
 
     setLoadingLogs(true)
     try {
-      const baseUrl = project.baseUrl.endsWith("/") 
-        ? project.baseUrl.slice(0, -1) 
-        : project.baseUrl
+      let logUrl = ""
       
-      const response = await axios.get(`${baseUrl}/deploy/logs`)
+      if (logUrlId === "default" || !logUrlId) {
+        // Default deploy logs
+        const baseUrl = project.baseUrl.endsWith("/") 
+          ? project.baseUrl.slice(0, -1) 
+          : project.baseUrl
+        logUrl = `${baseUrl}/deploy-hook/logs`
+      } else {
+        // Custom log URL
+        const customLogUrl = project.logUrls?.find((lu) => lu.id === logUrlId)
+        if (!customLogUrl) {
+          throw new Error("Log URL not found")
+        }
+        logUrl = customLogUrl.url
+      }
+      
+      const response = await axios.get(logUrl)
       
       if (response.data && response.data.logs && Array.isArray(response.data.logs)) {
         setLogs(response.data.logs)
@@ -292,28 +325,241 @@ function HomeContent() {
     }
   }
 
-  // Fetch logs when project is selected
-  useEffect(() => {
-    if (selectedProjectId && activeSection === "logs") {
-      fetchLogs(selectedProjectId)
+  const handleAddLogUrl = async (projectId: string) => {
+    const name = newLogUrlName.trim()
+    const url = newLogUrl.trim()
+    
+    if (!name || !url) {
+      toast.error("Please enter both name and URL")
+      return
     }
-  }, [selectedProjectId, activeSection])
 
-  // Scroll to bottom when logs update
-  useEffect(() => {
-    if (logs.length > 0 && logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight
+    const project = projects.find((p) => p.id === projectId)
+    if (!project) return
+
+    const newLogUrlObj: LogUrl = {
+      id: Date.now().toString(),
+      name,
+      url,
     }
-  }, [logs])
 
-  const scrollToBottom = () => {
-    if (logsContainerRef.current) {
-      logsContainerRef.current.scrollTo({
-        top: logsContainerRef.current.scrollHeight,
-        behavior: "smooth",
-      })
+    const updatedProjects = projects.map((p) =>
+      p.id === projectId
+        ? { ...p, logUrls: [...(p.logUrls || []), newLogUrlObj] }
+        : p
+    )
+
+    setProjects(updatedProjects)
+    await saveProjects(updatedProjects)
+    setNewLogUrlName("")
+    setNewLogUrl("")
+    toast.success("Log URL added successfully")
+  }
+
+  const handleRemoveLogUrl = async (projectId: string, logUrlId: string) => {
+    const updatedProjects = projects.map((p) =>
+      p.id === projectId
+        ? { ...p, logUrls: (p.logUrls || []).filter((lu) => lu.id !== logUrlId) }
+        : p
+    )
+
+    setProjects(updatedProjects)
+    await saveProjects(updatedProjects)
+    
+    // If removed log URL was selected, switch to default
+    if (selectedLogUrlId === logUrlId) {
+      setSelectedLogUrlId("default")
+    }
+    
+    toast.success("Log URL removed")
+  }
+
+  // Fetch logs when project or log URL is selected
+  useEffect(() => {
+    if (selectedProjectId && activeSection === "logs" && selectedLogUrlId) {
+      fetchLogs(selectedProjectId, selectedLogUrlId)
+    }
+  }, [selectedProjectId, selectedLogUrlId, activeSection])
+
+  // PM2 handlers
+  const fetchPM2Services = async () => {
+    const project = projects.find((p) => p.id === selectedProjectInProjects)
+    if (!project) return
+
+    setLoadingPM2(true)
+    try {
+      const baseUrl = project.baseUrl.endsWith("/") 
+        ? project.baseUrl.slice(0, -1) 
+        : project.baseUrl
+      const response = await axios.get(`${baseUrl}/pm2`)
+      
+      if (response.data.status === "success" && response.data.services) {
+        setPm2Services(response.data.services)
+      } else {
+        toast.error("Failed to fetch PM2 services")
+        addError("Failed to fetch PM2 services", "Invalid response from server")
+        setPm2Services([])
+      }
+    } catch (error: any) {
+      console.error("Error fetching PM2 services:", error)
+      const errorMsg = error.response?.data?.message || error.message || "Failed to fetch PM2 services"
+      toast.error("Failed to fetch PM2 services")
+      addError("Failed to fetch PM2 services", errorMsg)
+      setPm2Services([])
+    } finally {
+      setLoadingPM2(false)
     }
   }
+
+  const handlePM2ServiceAction = async (serviceName: string, action: "start" | "stop" | "restart") => {
+    const project = projects.find((p) => p.id === selectedProjectInProjects)
+    if (!project) return
+
+    const actionKey = `${serviceName}-${action}`
+    setPm2ActionLoading(actionKey)
+    try {
+      const baseUrl = project.baseUrl.endsWith("/") 
+        ? project.baseUrl.slice(0, -1) 
+        : project.baseUrl
+      
+      const response = await axios.post(`${baseUrl}/pm2/${serviceName}/${action}`)
+      
+      if (response.data.status === "success") {
+        toast.success(`${action} ${serviceName}`, {
+          description: response.data.message || `Service ${action}ed successfully`,
+        })
+        // Refresh PM2 services after action
+        await fetchPM2Services()
+      } else {
+        const errorMsg = response.data.message || "Unknown error occurred"
+        toast.error(`Failed to ${action} service`, {
+          description: errorMsg,
+        })
+        addError(`Failed to ${action} PM2 service`, errorMsg)
+      }
+    } catch (error: any) {
+      console.error(`Error ${action}ing PM2 service:`, error)
+      const errorMessage = error.response?.data?.message || error.message || `Failed to ${action} service`
+      toast.error(`Failed to ${action} service`, {
+        description: errorMessage,
+      })
+      addError(`Failed to ${action} PM2 service`, errorMessage)
+    } finally {
+      setPm2ActionLoading(null)
+    }
+  }
+
+  // Reset PM2 services when project selection changes
+  useEffect(() => {
+    if (selectedProjectInProjects) {
+      setPm2Services([])
+      setPm2ServiceDetails(null)
+      setPm2ServiceLogs([])
+      setSelectedPM2ServiceForLogs("")
+      setSelectedPM2ServiceForStreaming("")
+      setPm2ServiceDetailsOpen(false)
+      setPm2ServiceLogsOpen(false)
+      setPm2RealtimeLogsOpen(false)
+    }
+  }, [selectedProjectInProjects])
+
+  // PM2 Service Details handler
+  const fetchPM2ServiceDetails = async (serviceName: string) => {
+    const project = projects.find((p) => p.id === selectedProjectInProjects)
+    if (!project) return
+
+    setLoadingPM2Details(true)
+    setPm2ServiceDetailsOpen(true)
+    try {
+      const baseUrl = project.baseUrl.endsWith("/")
+        ? project.baseUrl.slice(0, -1)
+        : project.baseUrl
+      const response = await axios.get(`${baseUrl}/pm2/${serviceName}`)
+
+      if (response.data.status === "success") {
+        // Service details might be in response.data.service or response.data
+        const serviceData = response.data.service || response.data
+        setPm2ServiceDetails(serviceData)
+      } else {
+        toast.error("Failed to fetch service details")
+        addError("Failed to fetch PM2 service details", "Invalid response from server")
+        setPm2ServiceDetails(null)
+      }
+    } catch (error: any) {
+      console.error("Error fetching PM2 service details:", error)
+      const errorMsg =
+        error.response?.data?.message || error.message || "Failed to fetch service details"
+      toast.error("Failed to fetch service details")
+      addError("Failed to fetch PM2 service details", errorMsg)
+      setPm2ServiceDetails(null)
+    } finally {
+      setLoadingPM2Details(false)
+    }
+  }
+
+  // PM2 Service Logs handler
+  const fetchPM2ServiceLogs = async (serviceName: string) => {
+    const project = projects.find((p) => p.id === selectedProjectInProjects)
+    if (!project) return
+
+    setLoadingPM2Logs(true)
+    setSelectedPM2ServiceForLogs(serviceName)
+    setPm2ServiceLogsOpen(true)
+    try {
+      const baseUrl = project.baseUrl.endsWith("/")
+        ? project.baseUrl.slice(0, -1)
+        : project.baseUrl
+      const response = await axios.get(`${baseUrl}/pm2/${serviceName}/logs`)
+
+      if (response.data.status === "success" && response.data.logs) {
+        // Logs might be an array of strings, array of objects, or a string
+        if (Array.isArray(response.data.logs)) {
+          // Check if it's an array of objects with message property
+          const logStrings = response.data.logs.map((log: any) => {
+            if (typeof log === "string") {
+              return log
+            } else if (log && typeof log === "object" && log.message) {
+              return log.message
+            } else {
+              return String(log)
+            }
+          })
+          setPm2ServiceLogs(logStrings)
+        } else if (typeof response.data.logs === "string") {
+          setPm2ServiceLogs(response.data.logs.split("\n"))
+        } else {
+          setPm2ServiceLogs([])
+        }
+      } else {
+        toast.error("Failed to fetch service logs")
+        addError("Failed to fetch PM2 service logs", "Invalid response from server")
+        setPm2ServiceLogs([])
+      }
+    } catch (error: any) {
+      console.error("Error fetching PM2 service logs:", error)
+      const errorMsg =
+        error.response?.data?.message || error.message || "Failed to fetch service logs"
+      toast.error("Failed to fetch service logs")
+      addError("Failed to fetch PM2 service logs", errorMsg)
+      setPm2ServiceLogs([])
+    } finally {
+      setLoadingPM2Logs(false)
+    }
+  }
+
+  const handlePM2ViewDetails = (serviceName: string) => {
+    fetchPM2ServiceDetails(serviceName)
+  }
+
+  const handlePM2ViewLogs = (serviceName: string) => {
+    fetchPM2ServiceLogs(serviceName)
+  }
+
+  const handlePM2StreamLogs = (serviceName: string) => {
+    setSelectedPM2ServiceForStreaming(serviceName)
+    setPm2RealtimeLogsOpen(true)
+  }
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -323,355 +569,87 @@ function HomeContent() {
       
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {activeSection === "logs" && (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Deploy Logs</CardTitle>
-                <CardDescription>
-                  View deployment logs for your projects
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="project-select">Select Project</Label>
-                  <Select
-                    value={selectedProjectId}
-                    onValueChange={handleProjectSelect}
-                  >
-                    <SelectTrigger id="project-select">
-                      <SelectValue placeholder="Select a project" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                
-                {selectedProjectId && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Logs</Label>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => fetchLogs(selectedProjectId)}
-                        disabled={loadingLogs}
-                      >
-                        {loadingLogs ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Loading...
-                          </>
-                        ) : (
-                          "Refresh"
-                        )}
-                      </Button>
-                    </div>
-                    {loadingLogs ? (
-                      <div className="flex items-center justify-center py-8 rounded-lg border bg-background">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : logs.length > 0 ? (
-                      <div className="relative">
-                        <div 
-                          ref={logsContainerRef}
-                          className="rounded-lg border bg-background overflow-auto" 
-                          style={{ height: "600px" }}
-                        >
-                          <div className="flex font-mono text-sm">
-                            {/* Line numbers */}
-                            <div className="sticky left-0 bg-black px-3 py-2 border-r text-muted-foreground select-none">
-                              {logs.map((_, index) => (
-                                <div key={index} className="text-right leading-6">
-                                  {index + 1}
-                                </div>
-                              ))}
-                            </div>
-                            {/* Log content */}
-                            <div className="flex-1 min-w-0">
-                              <pre className="p-2 m-0 whitespace-pre overflow-visible">
-                                {logs.map((line, index) => (
-                                  <div key={index} className="leading-6">
-                                    {line || " "}
-                                  </div>
-                                ))}
-                              </pre>
-                            </div>
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={scrollToBottom}
-                          className="absolute bottom-4 right-4 h-9 w-9 rounded-full shadow-lg"
-                        >
-                          <ArrowDown className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border bg-background p-8 text-center text-muted-foreground">
-                        No logs available. Select a project to view logs.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <LogsSection
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            selectedLogUrlId={selectedLogUrlId}
+            logs={logs}
+            loadingLogs={loadingLogs}
+            onProjectSelect={handleProjectSelect}
+            onLogUrlSelect={handleLogUrlSelect}
+            onRefresh={() => fetchLogs(selectedProjectId, selectedLogUrlId)}
+          />
         )}
 
         {activeSection === "errors" && (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Errors</CardTitle>
-                    <CardDescription>
-                      View all application errors
-                    </CardDescription>
-                  </div>
-                  {errors.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={clearErrors}
-                    >
-                      Clear All
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                {errors.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <AlertCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No errors recorded</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {errors.map((error) => (
-                      <div
-                        key={error.id}
-                        className="p-4 rounded-lg border bg-card space-y-2"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <AlertCircle className="h-4 w-4 text-destructive" />
-                              <span className="font-medium text-sm">{error.message}</span>
-                            </div>
-                            {error.details && (
-                              <p className="text-xs text-muted-foreground ml-6 font-mono">
-                                {error.details}
-                              </p>
-                            )}
-                            <p className="text-xs text-muted-foreground ml-6 mt-1">
-                              {error.timestamp.toLocaleString()}
-                            </p>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={() => removeError(error.id)}
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <ErrorsSection
+            errors={errors}
+            onClearErrors={clearErrors}
+            onRemoveError={removeError}
+          />
         )}
 
         {activeSection === "projects" && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Section - Projects List */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Projects</CardTitle>
-                <CardDescription>
-                  Your saved projects
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {loading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  </div>
-                ) : projects.length === 0 ? (
-                  <p className="text-muted-foreground text-center py-8">
-                    No projects yet. Add your first project using the form on the right.
-                  </p>
-                ) : (
-                  <div className="space-y-4">
-                    {projects.map((project) => (
-                      <div
-                        key={project.id}
-                        className="p-4 rounded-lg border bg-card space-y-3"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between mb-1">
-                              <p className="font-medium text-base">{project.name}</p>
-                              {project.repos.length > 0 && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => toggleProject(project.id)}
-                                  className="h-6 w-6 p-0"
-                                >
-                                  {expandedProjects.has(project.id) ? (
-                                    <ChevronUp className="h-4 w-4" />
-                                  ) : (
-                                    <ChevronDown className="h-4 w-4" />
-                                  )}
-                                </Button>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground mb-2">{project.baseUrl}</p>
-                            <div className="flex gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleFetchRepos(project)}
-                                disabled={loadingRepos === project.id}
-                                className="mt-2"
-                              >
-                                {loadingRepos === project.id ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                    Loading...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Plus className="h-4 w-4 mr-2" />
-                                    Fetch Repos
-                                  </>
-                                )}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleViewLogs(project.id)}
-                                className="mt-2"
-                              >
-                                <FileText className="h-4 w-4 mr-2" />
-                                Logs
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {project.repos.length > 0 && expandedProjects.has(project.id) && (
-                          <div className="space-y-2 pt-2 border-t">
-                            <p className="text-xs text-muted-foreground font-medium">
-                              Repositories ({project.repos.length})
-                            </p>
-                            <div className="space-y-2">
-                              {project.repos.map((repo, index) => {
-                                const deployKey = `${project.id}-${repo.name}`
-                                const isDeploying = deployingRepo === deployKey
-                                return (
-                                  <div
-                                    key={index}
-                                    className="p-3 rounded border bg-background/50 text-sm space-y-2"
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex-1">
-                                        <div className="flex items-center justify-between mb-1">
-                                          <span className="font-medium">{repo.name}</span>
-                                          <Badge variant="outline" className="text-xs">
-                                            <GitBranch className="h-3 w-3 mr-1" />
-                                            {repo.branch}
-                                          </Badge>
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                          {repo.path}
-          </p>
-        </div>
-                                    </div>
-                                    <Button
-                                      variant="default"
-                                      size="sm"
-                                      onClick={() => handleDeploy(project, repo)}
-                                      disabled={isDeploying}
-                                      className="w-full"
-                                    >
-                                      {isDeploying ? (
-                                        <>
-                                          <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                                          Deploying...
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Rocket className="h-3 w-3 mr-2" />
-                                          Deploy
-                                        </>
-                                      )}
-                                    </Button>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Right Section - Add New Project Form */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Add New Project</CardTitle>
-                <CardDescription>
-                  Enter the base URL for your project
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleAddProject} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="projectName">Project Name</Label>
-                    <Input
-                      id="projectName"
-                      type="text"
-                      placeholder="My Project"
-                      value={newProjectName}
-                      onChange={(e) => setNewProjectName(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="baseUrl">Base URL</Label>
-                    <Input
-                      id="baseUrl"
-                      type="url"
-                      placeholder="https://example.com"
-                      value={newProjectUrl}
-                      onChange={(e) => setNewProjectUrl(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <Button type="submit" className="w-full">
-                    Add Project
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-        </div>
+          <ProjectsSection
+            projects={projects}
+            loading={loading}
+            selectedProjectId={selectedProjectInProjects}
+            newProjectName={newProjectName}
+            newProjectUrl={newProjectUrl}
+            loadingRepos={loadingRepos}
+            deployingRepo={deployingRepo}
+            pm2Services={pm2Services}
+            loadingPM2={loadingPM2}
+            pm2ActionLoading={pm2ActionLoading}
+            onProjectSelect={setSelectedProjectInProjects}
+            onProjectNameChange={setNewProjectName}
+            onProjectUrlChange={setNewProjectUrl}
+            onAddProject={handleAddProject}
+            onFetchRepos={handleFetchRepos}
+            onDeploy={handleDeploy}
+            onViewLogs={handleViewLogs}
+            onFetchPM2Services={fetchPM2Services}
+            onPM2ServiceAction={handlePM2ServiceAction}
+            onPM2ViewDetails={handlePM2ViewDetails}
+            onPM2ViewLogs={handlePM2ViewLogs}
+            onPM2StreamLogs={handlePM2StreamLogs}
+          />
         )}
       </main>
+
+      {/* PM2 Service Details Dialog */}
+      {selectedProjectInProjects && (
+        <>
+          <PM2ServiceDetailsComponent
+            open={pm2ServiceDetailsOpen}
+            onOpenChange={setPm2ServiceDetailsOpen}
+            serviceDetails={pm2ServiceDetails}
+            loading={loadingPM2Details}
+          />
+
+          {/* PM2 Service Logs Dialog */}
+          <PM2LogsViewer
+            open={pm2ServiceLogsOpen}
+            onOpenChange={setPm2ServiceLogsOpen}
+            serviceName={selectedPM2ServiceForLogs}
+            logs={pm2ServiceLogs}
+            loading={loadingPM2Logs}
+            onRefresh={() => fetchPM2ServiceLogs(selectedPM2ServiceForLogs)}
+          />
+
+          {/* PM2 Real-time Logs Dialog */}
+          {selectedProjectInProjects && (
+            <PM2RealtimeLogs
+              open={pm2RealtimeLogsOpen}
+              onOpenChange={setPm2RealtimeLogsOpen}
+              serviceName={selectedPM2ServiceForStreaming}
+              baseUrl={
+                projects.find((p) => p.id === selectedProjectInProjects)?.baseUrl || ""
+              }
+            />
+          )}
+        </>
+      )}
     </div>
   )
 }
